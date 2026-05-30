@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "src/sensorFusionEntryPoint.c"
+        "src/sensorFusionEntryPoint_initialize.c"
+        "src/sensorFusionEntryPoint_terminate.c"
+        "src/atan2d.c"
+        "src/mod.c"
+        "src/rt_nonfinite.c"
+        "src/rtGetInf.c"
+        "src/rtGetNaN.c"
+    INCLUDE_DIRS
+        "include"
+)
