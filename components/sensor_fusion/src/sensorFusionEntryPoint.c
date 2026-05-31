@@ -80,7 +80,7 @@ void sensorFusionEntryPoint(float ax, float ay, float az, float gx, float gy,
   /*  ------------------------------------------------------------ */
   /*  YAW COMPLEMENTARY FILTER */
   /*  ------------------------------------------------------------ */
-  /*diff = b_mod(b_atan2d(-(mx - state->magMidX), my - state->magMidY) + 4.33F) - HARD + SOFT IRON CORRECTION */
+  
 float corr_mx = (mx - state->magMidX) * state->magScaleX;
 float corr_my = (my - state->magMidY) * state->magScaleY;
 
