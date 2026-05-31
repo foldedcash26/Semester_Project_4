@@ -9,14 +9,14 @@ from tkinter import scrolledtext
 HOST = "0.0.0.0"
 PORT = 6767
 
-# ===== GLOBALS =====
+# GLOBALS 
 log_data = []
 buffer = ""
 running = True
 
-# =========================================================
+
 # CREATE SERVER
-# =========================================================
+
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind((HOST, PORT))
 server.listen(1)
@@ -27,31 +27,29 @@ conn, addr = server.accept()
 
 print(f"Connected by {addr}")
 
-# =========================================================
+
 # TKINTER UI
-# =========================================================
+
 root = tk.Tk()
 root.title("ESP32 Control Panel")
 root.geometry("700x500")
 
-# ===== OUTPUT BOX =====
+# OUTPUT BOX
 output_box = scrolledtext.ScrolledText(root, width=100, height=25)
 output_box.pack(padx=10, pady=10)
 
-# ===== COMMAND ENTRY =====
+# COMMAND ENTRY 
 command_entry = tk.Entry(root, width=50)
 command_entry.pack(pady=5)
 
-# =========================================================
+
 # LOG FUNCTION
-# =========================================================
 def log(text):
     output_box.insert(tk.END, text + "\n")
     output_box.see(tk.END)
 
-# =========================================================
+
 # RECEIVE THREAD
-# =========================================================
 def receive_thread():
     global buffer, running
 
@@ -74,7 +72,7 @@ def receive_thread():
 
                 log("ESP32: " + message)
 
-                # ===== PARSE SENSOR DATA =====
+                #PARSE SENSOR DATA
                 match = re.match(r"SF:\s*(.*)", message)
 
                 if match:
@@ -101,9 +99,8 @@ def receive_thread():
             log(f"Receive error: {e}")
             break
 
-# =========================================================
+
 # EXPORT CSV
-# =========================================================
 def export_csv():
 
     if not log_data:
@@ -129,9 +126,8 @@ def export_csv():
 
     log(f"CSV exported: {filename}")
 
-# =========================================================
+
 # SEND COMMAND
-# =========================================================
 def send_command(cmd):
 
     try:
@@ -141,9 +137,9 @@ def send_command(cmd):
     except Exception as e:
         log(f"Send error: {e}")
 
-# =========================================================
+
 # HANDLE ENTER BUTTON
-# =========================================================
+
 def on_send():
 
     command = command_entry.get().strip()
@@ -151,7 +147,7 @@ def on_send():
     if not command:
         return
 
-    # ===== COMMAND MAPPING =====
+    # COMMAND MAPPING this could have been improved by dirctyly sending command to send_command() and modifying the code on the ESP 
     if command == "stop":
         cmd = "STOP"
 
@@ -194,9 +190,8 @@ def on_send():
 
     command_entry.delete(0, tk.END)
 
-# =========================================================
+
 # BUTTONS
-# =========================================================
 button_frame = tk.Frame(root)
 button_frame.pack(pady=5)
 
@@ -217,15 +212,14 @@ export_button = tk.Button(
 )
 export_button.grid(row=0, column=2, padx=5)
 
-# =========================================================
+
 # START RECEIVE THREAD
-# =========================================================
 t_receive = threading.Thread(target=receive_thread, daemon=True)
 t_receive.start()
 
-# =========================================================
+
 # CLOSE WINDOW
-# =========================================================
+
 def on_close():
     global running
 
@@ -241,8 +235,7 @@ def on_close():
 
 root.protocol("WM_DELETE_WINDOW", on_close)
 
-# =========================================================
+
 # START GUI
-# =========================================================
 log("Connected to ESP32")
 root.mainloop()
