@@ -381,7 +381,7 @@ static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_b
 }
 
 void wifi_connection()
-{
+{ //based from the template for tcp client 
     nvs_flash_init();
     esp_netif_init();
     esp_event_loop_create_default();
@@ -662,7 +662,7 @@ void Dshot600_task(void *pvParameters)
 
 void tcp_connection_task(void *pvParameters)
 {
-    char host_ip[] = "10.38.17.78";
+    char host_ip[] = "10.38.17.78";//IPv4 Address from server (my laptop)
 
     struct sockaddr_in dest_addr;
 
@@ -763,7 +763,7 @@ void tcp_rx_task(void *pvParameters)
             uint16_t throttle_up=350;
             uint16_t throttle_down;
             uint16_t end=0;
-            if(throttle==1){spin=1;
+            if(throttle==1){spin=1;//could have make the arming disaming better
             xQueueSend(spin_queue,&spin,0);
             }
         }
@@ -824,7 +824,7 @@ void tcp_rx_task(void *pvParameters)
             ESP_LOGI(TAG, "kp pitch=%f", kp_pitch);
         }
     
-       //go here
+       
     }
 }
 void tcp_tx_task(void *pvParameters)
