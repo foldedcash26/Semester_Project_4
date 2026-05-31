@@ -36,7 +36,7 @@
 #include "sensorFusionEntryPoint_initialize.h"
 #include "sensorFusionEntryPoint_types.h"
 #include <math.h>
-//#include "fusion_functions.h"
+
 
 //dshot stuff
 #include "dshot.h"
@@ -69,32 +69,20 @@ static const char *sfTAG = "FUSION";
 #define MPU6500_PWR_MGMT_1_REG      0x6B
 #define CMPS2_ADDR                  0x30
  
-/* Sample rate */
+// Sample rate 
 #define SAMPLE_RATE_HZ              100
 #define SAMPLE_PERIOD_S             (1.0f / SAMPLE_RATE_HZ)
- 
-/* -----------------------------------------------------------------------
- * MAGNETIC DECLINATION for Odense, Denmark ~ +4.3 degrees
- * Find yours at: https://www.magnetic-declination.com
- * ----------------------------------------------------------------------- */
+
+
 #define DECLINATION_DEG             4.3f
  
-/* -----------------------------------------------------------------------
- * GYRO BIAS CALIBRATION
- * Number of samples to average at startup while the board is still.
- * At 100 Hz this takes 2 seconds.
- * ----------------------------------------------------------------------- */
+// number of samples for gyro calibration
 #define GYRO_CAL_SAMPLES            200
  
-/* -----------------------------------------------------------------------
- * MAG CALIBRATION
- * Duration of the startup magnetometer calibration in milliseconds.
- * 10 seconds matches your MATLAB run — rotate the board slowly in all
- * directions (figure-8 motion) during this time.
- * ----------------------------------------------------------------------- */
+// time mag calibration runs
 #define MAG_CAL_DURATION_MS         30000
 
-// -------- I2C helpers --------
+// 2C helpers
 static esp_err_t mpu_read(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *data, size_t len)
 {
     return i2c_master_transmit_receive(dev, &reg, 1, data, len, I2C_MASTER_TIMEOUT_MS);
@@ -106,7 +94,7 @@ static esp_err_t mpu_write(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t dat
     return i2c_master_transmit(dev, buf, sizeof(buf), I2C_MASTER_TIMEOUT_MS);
 }
  
-// -------- I2C init --------
+// I2C init
 static void i2c_master_init(i2c_master_bus_handle_t *bus,
                              i2c_master_dev_handle_t *mpu_dev,
                              i2c_master_dev_handle_t *cmps_dev)
@@ -136,39 +124,36 @@ static void i2c_master_init(i2c_master_bus_handle_t *bus,
     ESP_ERROR_CHECK(i2c_master_bus_add_device(*bus, &cmps_config, cmps_dev));
 }
  
-// -------- CMPS2 blocking single read (used during calibration) --------
+// CMPS2 blocking single read (used during calibration) 
 static esp_err_t compass_read_blocking(i2c_master_dev_handle_t dev,
                                         float *mx, float *my, float *mz)
 {
-    /* Trigger measurement */
+    // Trigger measurement
     uint8_t trig[2] = {0x07, 0x01};
     esp_err_t err = i2c_master_transmit(dev, trig, 2, I2C_MASTER_TIMEOUT_MS);
     if (err != ESP_OK) return err;
  
-    /* Wait for conversion (9 ms) */
+    // Wait for measurment to be done
     vTaskDelay(pdMS_TO_TICKS(10));
  
-    /* Read result */
+    // read resoults
     uint8_t reg = 0x00;
     uint8_t buf[6];
     err = i2c_master_transmit_receive(dev, &reg, 1, buf, 6, I2C_MASTER_TIMEOUT_MS);
     if (err != ESP_OK) return err;
  
-    /* MMC3416 outputs UNSIGNED 16-bit with null (zero field) = 32768.
-     * Must subtract 32768 BEFORE converting to float — matches MATLAB:
-     *   cb = @(lo,hi) double(uint16(hi*256 + lo)) - 32768
-     * Casting to int16_t first is WRONG: it causes a 32-Gauss jump at
-     * the null point, which ruins calibration and heading calculation. */
+    // read the data send the data
     uint16_t raw_xu = ((uint16_t)buf[1] << 8) | (uint16_t)buf[0];
     uint16_t raw_yu = ((uint16_t)buf[3] << 8) | (uint16_t)buf[2];
     uint16_t raw_zu = ((uint16_t)buf[5] << 8) | (uint16_t)buf[4];
+    // convert to angesl
     *mx = ((float)raw_yu - 32768.0f) / 2048.0f;
     *my = ((float)raw_zu - 32768.0f) / 2048.0f;
     *mz = ((float)raw_xu - 32768.0f) / 2048.0f;
     return ESP_OK;
 }
  
-// -------- CMPS2 async state machine (used in main loop) --------
+// CMPS2 async state mach
 typedef enum { COMPASS_IDLE, COMPASS_WAITING } compass_state_t;
  
 static compass_state_t  compass_state    = COMPASS_IDLE;
@@ -179,7 +164,7 @@ float mag_mid_x   = 0.0f;
 float mag_mid_y   = 0.0f;
 float mag_scale_x = 1.0f;
 float mag_scale_y = 1.0f;
- 
+ // compass trigger for async reading
 static void compass_trigger(i2c_master_dev_handle_t dev)
 {
     uint8_t buf[2] = {0x07, 0x01};
@@ -191,7 +176,7 @@ static void compass_trigger(i2c_master_dev_handle_t dev)
     compass_ready_at = esp_timer_get_time() + 9000;
     compass_state    = COMPASS_WAITING;
 }
- 
+// read for aysin reading
 static void compass_read_async(i2c_master_dev_handle_t dev)
 {
     uint8_t reg = 0x00;
@@ -212,7 +197,7 @@ static void compass_read_async(i2c_master_dev_handle_t dev)
     }
     compass_state = COMPASS_IDLE;
 }
- 
+ // check wether we are reading or waiting for a reading
 static void compass_update(i2c_master_dev_handle_t dev)
 {
     if (compass_state == COMPASS_IDLE) {
@@ -222,23 +207,24 @@ static void compass_update(i2c_master_dev_handle_t dev)
     }
 }
  
-// -------- IMU reads --------
+//  Accelrometer read reads 
 static esp_err_t read_accel(i2c_master_dev_handle_t dev,
                              float *ax, float *ay, float *az)
 {
     uint8_t reg = 0x3B;
     uint8_t raw[6];
     esp_err_t err = i2c_master_transmit_receive(dev, &reg, 1, raw, 6, 1000);
-    if (err != ESP_OK) {
+    if (err != ESP_OK) {  
         ESP_LOGE(TAGMPU, "Accel read failed: %s", esp_err_to_name(err));
         return err;
     }
     *ax = (int16_t)((raw[0] << 8) | raw[1]) / 16384.0f;
     *ay = (int16_t)((raw[2] << 8) | raw[3]) / 16384.0f;
     *az = (int16_t)((raw[4] << 8) | raw[5]) / 16384.0f;
+    // convert data
     return ESP_OK;
 }
- 
+ // just like the stuff for  accel
 static esp_err_t read_gyro(i2c_master_dev_handle_t dev,
                             float *gyrx, float *gyry, float *gyrz)
 {
@@ -255,11 +241,8 @@ static esp_err_t read_gyro(i2c_master_dev_handle_t dev,
     return ESP_OK;
 }
  
-/* -----------------------------------------------------------------------
- * GYRO BIAS CALIBRATION
- * Keep the board completely still — takes ~2 seconds.
- * ----------------------------------------------------------------------- */
-static void calibrate_gyro(i2c_master_dev_handle_t dev,
+
+static void calibrate_gyro(i2c_master_dev_handle_t dev,   // calibration of gyro
                             float *gx_bias, float *gy_bias, float *gz_bias)
 {
     ESP_LOGI(TAGMPU, "Gyro cal — keep board STILL for ~2 seconds...");
@@ -271,7 +254,7 @@ static void calibrate_gyro(i2c_master_dev_handle_t dev,
             sum_x += gx;
             sum_y += gy;
             sum_z += gz;
-        }
+        }  // calculates average ofset for each axis, 
         vTaskDelay(pdMS_TO_TICKS(1000 / SAMPLE_RATE_HZ));
     }
  
@@ -283,23 +266,13 @@ static void calibrate_gyro(i2c_master_dev_handle_t dev,
              *gx_bias, *gy_bias, *gz_bias);
 }
  
-/* -----------------------------------------------------------------------
- * MAGNETOMETER STARTUP CALIBRATION
- *
- * Mirrors the MATLAB magRead() logic exactly:
- *   - Tracks min and max of X and Y over MAG_CAL_DURATION_MS milliseconds
- *   - hard-iron offset = (max + min) / 2  for each axis
- *
- * During this phase rotate the board slowly in all directions —
- * a figure-8 motion works well, same as in your MATLAB session.
- * The serial monitor will print progress every second.
- * ----------------------------------------------------------------------- */
+
 static void calibrate_mag(i2c_master_dev_handle_t dev,
                            float *mid_x,
                            float *mid_y,
                            float *scale_x,
                            float *scale_y)
-{
+{  // callibation of the mag
     ESP_LOGI(cpTAG, "=== MAG CALIBRATION: rotate board in all directions for %d seconds ===",
              MAG_CAL_DURATION_MS / 1000);
  
@@ -314,11 +287,12 @@ static void calibrate_mag(i2c_master_dev_handle_t dev,
     while (esp_timer_get_time() < end_us) {
  
         if (compass_read_blocking(dev, &mx, &my, &mz) == ESP_OK) {
+             // Hard iron calibration
             if (mx > mag_max_x) mag_max_x = mx;
             if (mx < mag_min_x) mag_min_x = mx;
             if (my > mag_max_y) mag_max_y = my;
             if (my < mag_min_y) mag_min_y = my;
- 
+ // soft iron calibration
             float x_radius = (mag_max_x - mag_min_x) / 2.0f;
             float y_radius = (mag_max_y - mag_min_y) / 2.0f;
 
@@ -333,7 +307,7 @@ static void calibrate_mag(i2c_master_dev_handle_t dev,
                 *scale_y = avg_radius / y_radius;}
             else{
                 *scale_y = 1.0f;}
-
+// Hard iron calibration
             *mid_x = (mag_max_x + mag_min_x) / 2.0f;
             *mid_y = (mag_max_y + mag_min_y) / 2.0f;
 
@@ -345,7 +319,7 @@ ESP_LOGI(cpTAG,
          *scale_x, *scale_y);
         }
  
-        /* Print progress every second */
+        // prints proges of calibrations
         if (esp_timer_get_time() >= next_log) {
             next_log += 1000000;
             float elapsed = (esp_timer_get_time() - start_us) / 1e6f;
@@ -357,14 +331,7 @@ ESP_LOGI(cpTAG,
  
     ESP_LOGI(cpTAG, "=== Mag cal done: MidX=%.4f  MidY=%.4f ===", *mid_x, *mid_y);
 }
-
-
-//angles
-//float yaw;
-//float roll;
-//Data share
-//QueueHandle_t throthle_que,throttle_up_pitch_queue,throttle_down_pitch_queue,throttle_right_yaw_queue,throttle_left_yaw_queue;   // set values to motor
-
+// mutex structure for motor controll
 typedef struct {
     int pitch_up;
     int pitch_down;
@@ -377,7 +344,7 @@ static motor_commands_t g_motor_cmd = {0, 0, 0, 0};
 static SemaphoreHandle_t g_motor_mutex = NULL;
 
 
-
+// queue handel for using queue
 QueueHandle_t data_queue;
 QueueHandle_t pitch_queue,roll_queue,yaw_queue,yaw_w_dot_queue,pitch_w_dot_queue;  // data given to pc     
 QueueHandle_t pitch_set_queue,yaw_set_queue;                                       // set heading
@@ -435,17 +402,18 @@ void wifi_connection()
 
 
 void control_task(void *pvParameters)
-{
+{   // the controll task
     esp_err_t err;
     uint8_t data = 0;
+    // sets up i2c 
     i2c_master_bus_handle_t bus;
     i2c_master_dev_handle_t mpu_dev;
     i2c_master_dev_handle_t cmps_dev;
- 
+ // initilazies i2c
     i2c_master_init(&bus, &mpu_dev, &cmps_dev);
     ESP_LOGI(TAGMPU, "I2C initialized");
  
-    /* Check CMPS2 */
+    // chesk CMP2
     uint8_t cmps_id = 0, id_reg = 0x20;
     err = i2c_master_transmit_receive(cmps_dev, &id_reg, 1, &cmps_id, 1, 1000);
     if (err != ESP_OK)
@@ -453,38 +421,26 @@ void control_task(void *pvParameters)
     else
         ESP_LOGI(cpTAG, "CMPS2 Product ID = 0x%02X (expect 0x06)", cmps_id);
  
-    /* Wake MPU6500 — mirrors MATLAB init sequence exactly */
-    err = mpu_write(mpu_dev, MPU6500_PWR_MGMT_1_REG, 0x00); /* clear sleep bit */
+    // wakes up mpu6050
+    err = mpu_write(mpu_dev, MPU6500_PWR_MGMT_1_REG, 0x00); 
     if (err != ESP_OK) {
         ESP_LOGE(TAGMPU, "Failed to wake MPU6500: %s", esp_err_to_name(err));
         return;
     }
+    // configure mpu to right setting
     vTaskDelay(pdMS_TO_TICKS(50));
-    mpu_write(mpu_dev, MPU6500_PWR_MGMT_1_REG, 0x01); /* clock = gyro X PLL (more stable) */
+    mpu_write(mpu_dev, MPU6500_PWR_MGMT_1_REG, 0x01); // clock = gyro X PLL
     vTaskDelay(pdMS_TO_TICKS(50));
-    mpu_write(mpu_dev, 0x1A, 0x03);                   /* DLPF 44 Hz — smooths noise */
-    mpu_write(mpu_dev, 0x1B, 0x00);                   /* GYRO_CONFIG:  ±250 deg/s  LSB=131 */
-    mpu_write(mpu_dev, 0x1C, 0x00);                   /* ACCEL_CONFIG: +-2 g      LSB=16384 */
+    mpu_write(mpu_dev, 0x1A, 0x03);                   // DLPF 44 Hz — smooths noise 
+    mpu_write(mpu_dev, 0x1B, 0x00);                   // GYRO_CONFIG:  ±250 deg/s 
+    mpu_write(mpu_dev, 0x1C, 0x00);                   // ACCEL_CONFIG: +-2 g      
     vTaskDelay(pdMS_TO_TICKS(100));
  
-    /* WHO_AM_I check */
-    err = mpu_read(mpu_dev, MPU6500_WHO_AM_I_REG, &data, 1);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAGMPU, "WHO_AM_I read failed: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAGMPU, "WHO_AM_I = 0x%02X", data);
-        if      (data == 0x70) ESP_LOGI(TAGMPU, "MPU6500 detected");
-        else if (data == 0x71) ESP_LOGW(TAGMPU, "This is MPU9250, not MPU6500");
-        else if (data != 0x68) ESP_LOGW(TAGMPU, "Unknown device!");
-    }
+    // 
+
  
-    /* ---------------------------------------------------------------
-     * MMC3416 INIT — mirrors MATLAB exactly:
-     *   1. Refill capacitor (reg 0x07 = 0x80), wait 60 ms
-     *   2. SET sensor      (reg 0x07 = 0x20), wait 10 ms
-     * Without this the sensor may have wrong polarity or large offset.
-     * --------------------------------------------------------------- */
-    {
+    
+    {  // intizlazes CMPs2
         uint8_t mag_cmd[2];
         mag_cmd[0] = 0x07; mag_cmd[1] = 0x80;
         i2c_master_transmit(cmps_dev, mag_cmd, 2, I2C_MASTER_TIMEOUT_MS);
@@ -500,20 +456,10 @@ void control_task(void *pvParameters)
     }
     }
 
-    /* ---------------------------------------------------------------
-     * STEP 1: GYRO BIAS CALIBRATION — keep board still
-     * --------------------------------------------------------------- */
+    // start gyro calibration
     float gx_bias = 0.0f, gy_bias = 0.0f, gz_bias = 0.0f;
     calibrate_gyro(mpu_dev, &gx_bias, &gy_bias, &gz_bias);
- 
-    /* ---------------------------------------------------------------
-     * STEP 2: MAG STARTUP CALIBRATION — rotate board in all directions
-     * The resulting mid_x / mid_y replace the hardcoded MATLAB values.
-     * --------------------------------------------------------------- */
-    //float mag_mid_x = 0.0f;
-    //float mag_mid_y = 0.0f;
-    //float mag_scale_x = 1.0f;
-    //float mag_scale_y = 1.0f;
+ // starts mag calibration
 
     calibrate_mag(cmps_dev,
               &mag_mid_x,
@@ -521,14 +467,10 @@ void control_task(void *pvParameters)
               &mag_scale_x,
               &mag_scale_y);
  
-    /* ---------------------------------------------------------------
-     * SENSOR FUSION INIT
-     * magMidX / magMidY now come from the live startup calibration.
-     * --------------------------------------------------------------- */
+    // initliazies sensor fusion
     sensorFusionEntryPoint_initialize();
  
-    /* Init yaw from actual heading — matches MATLAB which reads one sample
-     * before the loop and sets cf_yaw = magHeading(...) */
+    // give intail values to magenomter
     float init_mx = 0.0f, init_my = 0.0f, init_mz = 0.0f;
     compass_read_blocking(cmps_dev, &init_mx, &init_my, &init_mz);
     float corr_mx = (init_mx - mag_mid_x) * mag_scale_x;
@@ -536,8 +478,6 @@ void control_task(void *pvParameters)
     float init_yaw = fmodf(
         atan2f(-corr_mx, corr_my) * 57.2957802f
         + 4.33f + 360.0f, 360.0f);
-        //(atan2f(-(init_mx - mag_mid_x), init_my - mag_mid_y) * 57.2957802f
-        //+ 4.33f + 360.0f, 360.0f);
     ESP_LOGI(sfTAG, "Initial yaw: %.1f deg", init_yaw);
 
     struct0_T sf_state = {
@@ -549,7 +489,7 @@ void control_task(void *pvParameters)
     .magScaleX = mag_scale_x,
     .magScaleY = mag_scale_y,
     };
- 
+ // sets up varibales for control loop
     float ax = 0.0f, ay = 0.0f, az = 0.0f;
     float gyrx = 0.0f, gyry = 0.0f, gyrz = 0.0f;
     float pitch = 0.0f, roll = 0.0f, yaw = 0.0f;
@@ -565,15 +505,12 @@ void control_task(void *pvParameters)
     int yaw_right, yaw_left;
     bool spin=0;
     float d_pitch,d_yaw;
-    short pd_yaw,pd_pitch;//needs to be checked 
+    short pd_yaw,pd_pitch;
     ESP_LOGI(sfTAG, "Starting sensor fusion at %d Hz", SAMPLE_RATE_HZ);
     start_con=1;
-    //int64_t last_time = esp_timer_get_time();
-    /* ---------------------------------------------------------------
-     * MAIN LOOP — 100 Hz
-     * --------------------------------------------------------------- */
+    
     while (1)
-    {
+    {  // main control loop
         xQueueReceive(spin_queue, &spin,0);
         xQueueReceive(pitch_set_queue, &pitch_set,0);
         xQueueReceive(yaw_set_queue, &yaw_set, 0);
@@ -582,28 +519,24 @@ void control_task(void *pvParameters)
         xQueueReceive(K_p_pitch_queue, &K_p_pitch, 0);
         xQueueReceive(K_d_yaw_queue, &K_d_yaw, 0);
         xQueueReceive(K_p_yaw_queue, &K_p_yaw, 0);
+        // gets data for tuning and arming/disarming and wanted picth and yaw
 
-
-        /* 1. Read accelerometer */
+        // accel data
         int64_t time=esp_timer_get_time();//in us
         read_accel(mpu_dev, &ax, &ay, &az);
 
-        //int64_t time=esp_timer_get_time();//in us
-        /* 2. Read gyroscope and subtract bias */
-        
-        /*float actual_dt = (time - last_time)/1E3f;
-        last_time = time; */
+        // read gyro data
         if (read_gyro(mpu_dev, &gyrx, &gyry, &gyrz) == ESP_OK) {
             gyrx -= gx_bias;
             gyry -= gy_bias;
             gyrz -= gz_bias;
         }
  
-        /* 3. Non-blocking magnetometer update */
+        // Non-blocking magnetometer update
         compass_update(cmps_dev);
  
         
-        /* 4. Run complementary filter */
+        // gives data to sensorfusion
         sensorFusionEntryPoint(ax, ay, az,
                                gyrx, gyry, gyrz,
                                mag_x, mag_y, mag_z,
@@ -611,50 +544,46 @@ void control_task(void *pvParameters)
                                &sf_state,
                                &pitch, &roll, &yaw);
  
-        /* 5. Log every 50 iterations (every 0.5 s) */
+        // print data ever 500 ms
         static int log_counter = 0;
         if (++log_counter >= 10) {
             log_counter = 0;
             ESP_LOGI(sfTAG, "Pitch: %+6.2f  Roll: %+6.2f  Yaw: %5.1f  M_X=%+6.3f  M_Y=%+6.3f  M_Z=%+6.3f",
                      pitch, roll, yaw, mag_x, mag_y, mag_z);
-            //ESP_LOGI(cpTAG, "Mag   [Gauss]  X=%+6.3f  Y=%+6.3f  Z=%+6.3f", mag_x, mag_y, mag_z);
+            // sends data to queue will sent it to the part which sent data to pc
             xQueueSend(yaw_queue,&yaw,0);
             xQueueSend(roll_queue,&roll,0);
             xQueueSend(pitch_queue,&pitch,0);
-            
+        
             xQueueSend(pitch_w_dot_queue,&gyry,0); //pitch is arround the y-axis!!!
             xQueueSend(yaw_w_dot_queue,&gyrz,0);   //yaw is arround the z-axis!!!
             
-            //ESP_LOGI(TAG,   "Accel [g]      X=%+6.3f  Y=%+6.3f  Z=%+6.3f", ax, ay, az);
-            //ESP_LOGI(TAG,   "Gyro  [deg/s]  X=%+6.2f  Y=%+6.2f  Z=%+6.2f", gyrx, gyry, gyrz);
-            //ESP_LOGI(cpTAG, "Mag   [Gauss]  X=%+6.3f  Y=%+6.3f  Z=%+6.3f", mag_x, mag_y, mag_z);
+            
         }
+        // calulated error for yaw and pitch
         error_yaw=yaw_set-yaw;
         error_pitch=pitch_set-pitch;
-
+        // pd calulateion
         pd_yaw=(K_p_yaw*error_yaw+K_d_yaw*(error_yaw-old_error_yaw)*2/((double)(esp_timer_get_time()-time)*1E-3));//SAMPLE_PERIOD_S
         d_pitch=(K_d_pitch*(error_pitch-old_error_pitch)*2/((double)(esp_timer_get_time()-time)*1E-3));//change to sample period in us if still not working!
         pd_pitch=K_p_pitch*error_pitch+d_pitch;
-        /* float d_pitch_max=500;
-        if(d_pitch>d_pitch_max)d_pitch=d_pitch_max;
-        if(d_pitch<-d_pitch_max)d_pitch=-d_pitch_max; */
+       
         pd_pitch=K_p_pitch*error_pitch+d_pitch; 
+        // save current error as old error, for 
         old_error_yaw=error_yaw;
 
 
         old_error_pitch=error_pitch;
 
-        
+        // split pd in to values for the differntail thrust set up
         yaw_left=400-(pd_yaw/2);
         yaw_right=400+(pd_yaw/2);
-        if(pitch_set>=0){
         pitch_up=400+(pd_pitch/2);
         pitch_down=400-(pd_pitch/2);
-        }
-        if(pitch_set<0){
+        
         pitch_up=400-(pd_pitch/2);
         pitch_down=400+(pd_pitch/2);
-        }
+        
         // set end cap for Dshot so motors don´t stall out
         if(pitch_up<70)
         pitch_up=70;
@@ -677,24 +606,24 @@ void control_task(void *pvParameters)
         // Take the mutex with timeout 0 — don't wait, just skip if busy
         if(xSemaphoreTake(g_motor_mutex, 0) == pdTRUE) {
         if(spin){
-            //g_motor_cmd.yaw_right  = yaw_right;
-            //g_motor_cmd.yaw_left   = yaw_left;
+            g_motor_cmd.yaw_right  = yaw_right;
+            g_motor_cmd.yaw_left   = yaw_left;
             g_motor_cmd.pitch_down = pitch_down;
             g_motor_cmd.pitch_up   = pitch_up;
-        } else {
+        } else { // if we are not armed motor power is 0
             g_motor_cmd.yaw_right  = 0;
             g_motor_cmd.yaw_left   = 0;
             g_motor_cmd.pitch_down = 0;
             g_motor_cmd.pitch_up   = 0;
         }
-            xSemaphoreGive(g_motor_mutex); // always release!
+            xSemaphoreGive(g_motor_mutex); 
         }       
-        /* 6. Sleep for remainder of 10 ms slot */
+        // ensure proper lengh of control loop
         vTaskDelay(pdMS_TO_TICKS((1000 / SAMPLE_RATE_HZ)));
 
     }
  
-    /* Unreachable in normal operation */
+   
     i2c_master_bus_rm_device(mpu_dev);
     i2c_master_bus_rm_device(cmps_dev);
     i2c_del_master_bus(bus);
@@ -823,9 +752,9 @@ void tcp_rx_task(void *pvParameters)
 
         ESP_LOGI(TAG, "RX: %s", rx_buffer);
 
-        //-----------------------------------
+       
         // COMMAND PARSER
-        //-----------------------------------
+       
 
         if (strncmp(rx_buffer, "THROTTLE:", 9) == 0)
         {
@@ -902,8 +831,7 @@ void tcp_tx_task(void *pvParameters)
 {
     float yaw_read, pitch_read, roll_read,pitch_omega_dot,yaw_omega_dot;
 
-    //char tx_buffer[128];
-
+ 
     while (1)
     {
         if (g_sock < 0)
@@ -911,6 +839,7 @@ void tcp_tx_task(void *pvParameters)
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
+        // gets data from the control loop
         xQueueReceive(roll_queue, &roll_read, pdMS_TO_TICKS(2));
         xQueueReceive(pitch_queue, &pitch_read, pdMS_TO_TICKS(2));
         xQueueReceive(yaw_queue, &yaw_read, pdMS_TO_TICKS(2));
@@ -939,17 +868,13 @@ void tcp_tx_task(void *pvParameters)
 void app_main(void)
 {
     
-    
-
-    //gpio_num_t pins[4] = {GPIO_NUM_32, GPIO_NUM_33, GPIO_NUM_25, GPIO_NUM_26};
     srand(25);
     //data share
     data_queue = xQueueCreate(10, sizeof(int));
-
+    // gets data from the mutex
     g_motor_mutex = xSemaphoreCreateMutex();
-/* set up mutex motots*/
 
-    //throthle_que= xQueueCreate(2, sizeof(int));
+
     yaw_queue = xQueueCreate(2, sizeof(float));
     roll_queue = xQueueCreate(2, sizeof(float));
     pitch_queue = xQueueCreate(2, sizeof(float));
@@ -965,13 +890,7 @@ void app_main(void)
     K_d_yaw_queue = xQueueCreate(2, sizeof(float));
     K_p_pitch_queue = xQueueCreate(2, sizeof(float));
     K_d_pitch_queue = xQueueCreate(2, sizeof(float));
-    //tcp_client();
-     // TCP on Core 0 (WI-FI communication)
-     //dshot_init();
-    //ESP_LOGI("DSHOT", "motor pin = %d", motors->pin);
     
-    /*for (int i = 0; i < 4; i++)
-    dshot_motor_init(&motors[i]);*/
     rmt_copy_encoder_config_t copy_config = {};
     ESP_ERROR_CHECK(
         rmt_new_copy_encoder(&copy_config, &copy_encoder)
@@ -1073,7 +992,7 @@ vTaskDelay(pdMS_TO_TICKS(1000));
     xTaskCreatePinnedToCore(
         Dshot600_task,
         "Dshot600_task",
-        1024,//try if it tweaks 2048
+        1024,
         NULL,
         5,
         NULL,
